@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,7 +56,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Read the file content into a byte slice
-	fileBytes, err := io.ReadAll(multipartFile)
+	fileBytesThumbnail, err := io.ReadAll(multipartFile)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't read file", err)
 		return
@@ -73,29 +74,32 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// instruction - Because the thumbnail_url has all the data we need, delete the global thumbnail map and the GET route for thumbnails.
 	// Save the thumbnail to the global map
 	// Create a new thumbnail struct with the image data and media type
 	// Add the thumbnail to the global map, using the video's ID as the key
-	videoThumbnails[videoID] = thumbnail{
-		data:      fileBytes,
-		mediaType: mediaType,
-	}
+	// videoThumbnails[videoID] = thumbnail{
+	// data:      fileBytesThumbnail,
+	// mediaType: mediaType,
+	//}
 
 	// Update the video metadata so that it has a new thumbnail URL, then update the record in
 	// the database by using the cfg.db.UpdateVideo function. The thumbnail URL should have this format:
 	// http://localhost:<port>/api/thumbnails/{videoID}
 	// This will all work because the /api/thumbnails/{videoID} endpoint serves thumbnails from that global map.
-	url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
-	video.ThumbnailURL = &url
+	// url := fmt.Sprintf("http://localhost:%s/api/thumbnails/%s", cfg.port, videoID)
+	base64Thumbnail := base64.StdEncoding.EncodeToString(fileBytesThumbnail)
+	dataURL := "data:" + mediaType + ";base64," + base64Thumbnail
+	video.ThumbnailURL = &dataURL
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		delete(videoThumbnails, videoID)
+		// delete(videoThumbnails, videoID) instruction - Because the thumbnail_url has all the data we need, delete the global thumbnail map and the GET route for thumbnails.
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
 	}
 
-	// Respond with updated JSON of the video's metadata. Use the provided respondWithJSON function and pass it the updated database.Video struct to marshal.
+	// Respond with updated JSON of the video's metadata. Use the provided respondWithJSON function and pass it the updated database. Video struct to marshal.
 	// before change - respondWithJSON(w, http.StatusOK, struct{}{})
 	respondWithJSON(w, http.StatusOK, video)
 
