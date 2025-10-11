@@ -64,7 +64,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	assetPath := getAssetPath(videoID, mediaType)
+	assetPath := getAssetPath(mediaType)
 	thumbnailDiskPath := cfg.getAssetDiskPath(assetPath)
 
 	thumbnailFile, err := os.Create(thumbnailDiskPath)
