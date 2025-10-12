@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -21,17 +25,8 @@ type apiConfig struct {
 	s3Region         string
 	s3CfDistribution string
 	port             string
+	s3Client         *s3.Client
 }
-
-// instruction - Because the thumbnail_url has all the data we need, delete the global thumbnail map and the GET route for thumbnails.
-/* removed after adding thumbnail logic in handler upload
-type thumbnail struct {
-	data      []byte
-	mediaType string
-}
-
-var videoThumbnails = map[uuid.UUID]thumbnail{}
-*/
 
 func main() {
 	godotenv.Load(".env")
@@ -86,6 +81,15 @@ func main() {
 		log.Fatal("PORT environment variable is not set")
 	}
 
+	// Load AWS configuration (automatically uses credentials from `aws configure`)
+	awsCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
+	if err != nil {
+		log.Fatalf("Unable to load AWS SDK config: %v", err)
+	}
+
+	// Create S3 client from configuration
+	s3Client := s3.NewFromConfig(awsCfg)
+
 	cfg := apiConfig{
 		db:               db,
 		jwtSecret:        jwtSecret,
@@ -96,6 +100,7 @@ func main() {
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
 		port:             port,
+		s3Client:         s3Client,
 	}
 
 	err = cfg.ensureAssetsDir()
@@ -121,7 +126,6 @@ func main() {
 	mux.HandleFunc("POST /api/video_upload/{videoID}", cfg.handlerUploadVideo)
 	mux.HandleFunc("GET /api/videos", cfg.handlerVideosRetrieve)
 	mux.HandleFunc("GET /api/videos/{videoID}", cfg.handlerVideoGet)
-	// mux.HandleFunc("GET /api/thumbnails/{videoID}", cfg.handlerThumbnailGet) instruction - Because the thumbnail_url has all the data we need, delete the global thumbnail map and the GET route for thumbnails.
 	mux.HandleFunc("DELETE /api/videos/{videoID}", cfg.handlerVideoMetaDelete)
 
 	mux.HandleFunc("POST /admin/reset", cfg.handlerReset)
