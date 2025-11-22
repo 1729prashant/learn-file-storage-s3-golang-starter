@@ -128,15 +128,31 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 		switch {
 		case w > h:
-			prefix = "landscape/"
+			prefix = "landscape-"
 		case h > w:
-			prefix = "portrait/"
+			prefix = "portrait-"
 		default:
-			prefix = "other/"
+			prefix = "other-"
 		}
 	} else {
-		prefix = "other/"
+		prefix = "other-"
 	}
+
+	// ---- Process video to faststart MP4 ----
+	processedPath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to process video", err)
+		return
+	}
+	defer os.Remove(processedPath)
+
+	// ---- Upload processed video ----
+	processedFile, err := os.Open(processedPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to read processed video", err)
+		return
+	}
+	defer processedFile.Close()
 
 	// ---- 9. Generate S3 key ----
 	videoKey := prefix + fmt.Sprintf("%x%s", uuid.New(), filepath.Ext(videoHeader.Filename))
@@ -145,7 +161,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	putInput := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(videoKey),
-		Body:        tempFile,
+		Body:        processedFile,
 		ContentType: aws.String(mediaType),
 	}
 
@@ -219,4 +235,34 @@ func getVideoAspectRatio(filePath string) (string, error) {
 
 	// Format aspect ratio
 	return fmt.Sprintf("%d:%d", width, height), nil
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+
+	// Ensure the file path is absolute for safety
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	processedPath := absPath + ".processing"
+
+	// Prepare command
+	cmd := exec.Command(
+		"ffmpeg",
+		"-i", absPath,
+		"-c", "copy",
+		"-movflags",
+		"faststart",
+		"-f",
+		"mp4",
+		processedPath,
+	)
+
+	// Run command
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to execute ffmpeg: %w", err)
+	}
+
+	return processedPath, nil
 }
