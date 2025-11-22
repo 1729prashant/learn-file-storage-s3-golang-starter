@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -104,8 +110,36 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// ---- Get Aspect Ratio ----
+	ratio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to read video metadata", err)
+		return
+	}
+
+	// ---- Categorize Orientation ----
+	// e.g., "1920:1080"
+	parts := strings.Split(ratio, ":")
+	var prefix string
+
+	if len(parts) == 2 {
+		w, _ := strconv.Atoi(parts[0])
+		h, _ := strconv.Atoi(parts[1])
+
+		switch {
+		case w > h:
+			prefix = "landscape/"
+		case h > w:
+			prefix = "portrait/"
+		default:
+			prefix = "other/"
+		}
+	} else {
+		prefix = "other/"
+	}
+
 	// ---- 9. Generate S3 key ----
-	videoKey := fmt.Sprintf("%x%s", uuid.New(), filepath.Ext(videoHeader.Filename))
+	videoKey := prefix + fmt.Sprintf("%x%s", uuid.New(), filepath.Ext(videoHeader.Filename))
 
 	// ---- 10. Upload to S3 ----
 	putInput := &s3.PutObjectInput{
@@ -132,4 +166,57 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	// ---- 12. Respond with updated video ----
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+
+	type ffprobeOutput struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+	// Ensure the file path is absolute for safety (optional)
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	// Prepare command
+	cmd := exec.Command(
+		"ffprobe",
+		"-v", "error",
+		"-print_format", "json",
+		"-show_streams",
+		absPath,
+	)
+
+	// Capture output
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	// Run command
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to execute ffprobe: %w", err)
+	}
+
+	// Parse JSON
+	var data ffprobeOutput
+	if err := json.Unmarshal(out.Bytes(), &data); err != nil {
+		return "", fmt.Errorf("failed to parse ffprobe output: %w", err)
+	}
+
+	if len(data.Streams) == 0 {
+		return "", errors.New("no streams found in video")
+	}
+
+	width := data.Streams[0].Width
+	height := data.Streams[0].Height
+
+	if width == 0 || height == 0 {
+		return "", errors.New("width or height is zero, cannot determine aspect ratio")
+	}
+
+	// Format aspect ratio
+	return fmt.Sprintf("%d:%d", width, height), nil
 }
